@@ -1,0 +1,172 @@
+---
+title: "Otto Group Product Challenge"
+author: "Daniel Crofts"
+format: html
+editor: visual
+---
+
+## Data and Libraries
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(xgboost)
+library(vip)
+library(glmnet)
+library(janitor)
+library(corrplot)
+library(ranger)
+library(data.table)
+library(caret)
+library(nnet)
+
+
+set.seed(2025)
+
+dat_train <- read_csv("train.csv")
+dat_test <- read_csv("test.csv")
+sample_submission <- read_csv("sampleSubmission.csv")
+
+# glimpse(dat_train)
+# glimpse(dat_test)
+
+
+
+```
+
+## Log Reg Model
+
+```{r}
+# Train multinomial logistic regression
+lr_fit <- multinom(target ~ ., data = train_clean)
+
+# Predict class probabilities for the test set
+lr_preds <- predict(lr_fit, newdata = test_x_clean, type = "prob")
+
+# Build Kaggle submission
+submission_lr <- bind_cols(
+  tibble(id = dat_test$id),
+  as_tibble(lr_preds)
+)
+
+names(submission_lr) <- c("id", paste0("Class_", 1:9))
+
+write_csv(submission_lr, "log_reg_submission.csv")
+
+```
+## Random Forest Model
+
+```{r}
+train <- dat_train %>% mutate(target = factor(target))
+
+# NZV Removal
+nzv_cols <- caret::nearZeroVar(train %>% select(-id, -target))
+train_x_clean <- train %>% select(-id, -target) %>% select(-all_of(nzv_cols))
+train_clean <- train_x_clean %>% mutate(target = train$target)
+
+test_x_clean <- dat_test %>% 
+  select(-id) %>% 
+  select(-all_of(nzv_cols))
+
+# SIMPLE recipe (no normalization)
+rf_recipe <- recipe(target ~ ., data = train_clean)
+
+# Random Forest Model
+rf_model <- rand_forest(
+  mtry  = 20,
+  min_n = 5,
+  trees = 1000
+) %>%
+  set_engine("ranger", importance = "impurity",
+             num.threads = parallel::detectCores()) %>%
+  set_mode("classification")
+
+rf_wf <- workflow() %>%
+  add_recipe(rf_recipe) %>%
+  add_model(rf_model)
+
+# ---- FAST: Fit ONCE on FULL TRAINING DATA ----
+final_rf_fit <- fit(
+  rf_wf,
+  data = train_clean
+)
+
+# ---- Predict probabilities on test ----
+rf_preds <- predict(
+  final_rf_fit,
+  new_data = test_x_clean,
+  type = "prob"
+)
+
+# ---- Build submission ----
+rf_submission <- bind_cols(
+  tibble(id = dat_test$id),
+  rf_preds
+)
+
+names(rf_submission) <- c("id", paste0("Class_", 1:9))
+
+write_csv(rf_submission, "rf_submission.csv")
+
+
+```
+
+## XG Boost Model
+
+```{r}
+xgb_recipe <- recipe(target ~ ., data = train_clean) %>%
+  step_normalize(all_predictors()) %>%
+  step_zv(all_predictors())
+
+xgb_model <- boost_tree(
+  trees = 1000,
+  learn_rate = 0.05,
+  tree_depth = 6,
+  mtry = 20,
+  min_n = 5,
+  loss_reduction = 0,
+  sample_size = 1
+) %>%
+  set_engine("xgboost", nthread = parallel::detectCores()) %>%
+  set_mode("classification")
+
+xgb_wf <- workflow() %>%
+  add_recipe(otto_recipe) %>%
+  add_model(xgb_model)
+
+# CV
+xgb_res <- fit_resamples(
+  xgb_wf,
+  otto_folds,
+  metrics = metric_set(accuracy, mn_log_loss),
+  control = control_resamples(save_pred = TRUE)
+)
+
+collect_metrics(xgb_res)
+
+# Fit final XGBoost model on FULL training data
+final_xgb_fit <- fit(
+  xgb_wf,
+  data = train_clean
+)
+
+# Predict probabilities for test set
+xgb_preds <- predict(
+  final_xgb_fit,
+  new_data = test_x_clean,
+  type = "prob"
+)
+
+# Submission
+xgb_submission <- bind_cols(
+  tibble(id = dat_test$id),
+  xgb_preds
+)
+
+names(xgb_submission) <- c("id", paste0("Class_", 1:9))
+
+write_csv(xgb_submission, "xgb_submission.csv")
+
+
+```
+
