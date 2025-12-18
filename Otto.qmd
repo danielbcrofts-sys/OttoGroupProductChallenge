@@ -85,20 +85,19 @@ rf_wf <- workflow() %>%
   add_recipe(rf_recipe) %>%
   add_model(rf_model)
 
-# ---- FAST: Fit ONCE on FULL TRAINING DATA ----
+# fir on train
 final_rf_fit <- fit(
   rf_wf,
   data = train_clean
 )
 
-# ---- Predict probabilities on test ----
+# predict on test
 rf_preds <- predict(
   final_rf_fit,
   new_data = test_x_clean,
   type = "prob"
 )
 
-# ---- Build submission ----
 rf_submission <- bind_cols(
   tibble(id = dat_test$id),
   rf_preds
@@ -111,7 +110,7 @@ write_csv(rf_submission, "rf_submission.csv")
 
 ```
 
-## XG Boost Model
+## XG Boost Model (BEST)
 
 ```{r}
 train <- dat_train %>% mutate(target = factor(target))
@@ -138,17 +137,13 @@ otto_test  <- testing(otto_split)
 
 otto_folds <- vfold_cv(otto_train, v = 5, strata = target)
 
-#==============================================
-# 2. XGBoost Recipe (this replaces otto_recipe)
-#==============================================
+# XGBoost Recipe (this replaces otto_recipe)
 
 xgb_recipe <- recipe(target ~ ., data = otto_train) %>%
   step_normalize(all_predictors()) %>%
   step_zv(all_predictors())
 
-#==============================================
-# 3. XGBoost Model Specification
-#==============================================
+# XGBoost Model Specification
 
 xgb_model <- boost_tree(
   trees = 1000,
@@ -167,9 +162,7 @@ xgb_wf <- workflow() %>%
   add_recipe(xgb_recipe) %>%
   add_model(xgb_model)
 
-#==============================================
-# 4. Cross-Validation Performance
-#==============================================
+# CV
 
 xgb_res <- fit_resamples(
   xgb_wf,
@@ -180,18 +173,17 @@ xgb_res <- fit_resamples(
 
 collect_metrics(xgb_res)
 
-#==============================================
-# 5. Fit Final Model on ALL Training Data
-#==============================================
+
+# Fit Final Model 
+
 
 final_xgb_fit <- fit(
   xgb_wf,
   data = train_clean
 )
 
-#==============================================
-# 6. Predict Probabilities for Kaggle Submission
-#==============================================
+# predict on test
+
 
 xgb_preds <- predict(
   final_xgb_fit,
