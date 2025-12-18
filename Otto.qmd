@@ -114,9 +114,41 @@ write_csv(rf_submission, "rf_submission.csv")
 ## XG Boost Model
 
 ```{r}
-xgb_recipe <- recipe(target ~ ., data = train_clean) %>%
+train <- dat_train %>% mutate(target = factor(target))
+
+# Remove near-zero variance columns
+nzv_cols <- caret::nearZeroVar(train %>% select(-id, -target))
+
+train_x_clean <- train %>%
+  select(-id, -target) %>%
+  select(-all_of(nzv_cols))
+
+test_x_clean <- dat_test %>%
+  select(-id) %>%
+  select(-all_of(nzv_cols))
+
+# Reattach target
+train_clean <- train_x_clean %>%
+  mutate(target = train$target)
+
+# Train/test split + CV folds
+otto_split <- initial_split(train_clean, prop = 0.8, strata = target)
+otto_train <- training(otto_split)
+otto_test  <- testing(otto_split)
+
+otto_folds <- vfold_cv(otto_train, v = 5, strata = target)
+
+#==============================================
+# 2. XGBoost Recipe (this replaces otto_recipe)
+#==============================================
+
+xgb_recipe <- recipe(target ~ ., data = otto_train) %>%
   step_normalize(all_predictors()) %>%
   step_zv(all_predictors())
+
+#==============================================
+# 3. XGBoost Model Specification
+#==============================================
 
 xgb_model <- boost_tree(
   trees = 1000,
@@ -130,11 +162,15 @@ xgb_model <- boost_tree(
   set_engine("xgboost", nthread = parallel::detectCores()) %>%
   set_mode("classification")
 
+# Workflow (uses the correct recipe!)
 xgb_wf <- workflow() %>%
-  add_recipe(otto_recipe) %>%
+  add_recipe(xgb_recipe) %>%
   add_model(xgb_model)
 
-# CV
+#==============================================
+# 4. Cross-Validation Performance
+#==============================================
+
 xgb_res <- fit_resamples(
   xgb_wf,
   otto_folds,
@@ -144,20 +180,25 @@ xgb_res <- fit_resamples(
 
 collect_metrics(xgb_res)
 
-# Fit final XGBoost model on FULL training data
+#==============================================
+# 5. Fit Final Model on ALL Training Data
+#==============================================
+
 final_xgb_fit <- fit(
   xgb_wf,
   data = train_clean
 )
 
-# Predict probabilities for test set
+#==============================================
+# 6. Predict Probabilities for Kaggle Submission
+#==============================================
+
 xgb_preds <- predict(
   final_xgb_fit,
   new_data = test_x_clean,
   type = "prob"
 )
 
-# Submission
 xgb_submission <- bind_cols(
   tibble(id = dat_test$id),
   xgb_preds
@@ -166,7 +207,6 @@ xgb_submission <- bind_cols(
 names(xgb_submission) <- c("id", paste0("Class_", 1:9))
 
 write_csv(xgb_submission, "xgb_submission.csv")
-
 
 ```
 
